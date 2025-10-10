@@ -26,3 +26,6 @@ __pycache__
 .cursorrules
 .corepack
 justfile
+
+src/pyth-price-feeds.json
+src/orders.json
