@@ -1,5 +1,7 @@
 build
 node_modules
+collector/node_modules
+collector/dist
 .idea
 .arcconfig
 *.iml

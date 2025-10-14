@@ -1,127 +1,87 @@
-# Pyth and Stox Data
+# Metrics Collector
 
-### Installation
+A single TypeScript collector ingests three data sources on Base mainnet and stores them in a shared SQLite database for downstream analytics (for example Grafana):
 
-1. Install dependencies:
-```bash
-nix develop
+- **Pyth prices** for all configured tickers via HyperSync logs.
+- **Executed trades** from the Rain orderbook subgraph since the last successful run.
+- **Current orderbook quotes** (remaining liquidity) for tracked orders, classified as buy/sell with calculated USDC prices.
+
+The collector writes snapshots into `/data/metrics.db` (configurable) using `better-sqlite3`. All transformations normalise quote/trade direction (`BUY` = output token is USDC, `SELL` = input token is USDC) and convert the on-chain ratio into a human readable USDC price. Quotes with zero remaining liquidity are skipped.
+
+## Repository Layout
+
 ```
-```bash
-npm install
+collector/
+  package.json        # Node project (TypeScript, build scripts)
+  tsconfig.json
+  src/                # Collector sources (entrypoint: index.ts)
+  Dockerfile          # Multi-stage image for the collector
 ```
 
-2. Create a `.env` file in the root directory with the following variables:
+The root `docker-compose.yml` also brings up Grafana with the SQLite plugin pre-installed so you can explore the database directly.
+
+## Environment
+
+Create a `.env` file at the repository root (Compose loads it automatically). Example:
 
 ```env
-# For stoxData.js
-FROM_TIMESTAMP=1759567171
-TO_TIMESTAMP=9999999999
+# SQLite database location (inside the container)
+DATABASE_PATH=/data/metrics.db
 
-# For pythData.js
-START_BLOCK=36323073
-END_BLOCK=36649229
+# Initial backfill hints for the first run only
+PYTH_START_BLOCK=36613177
+TRADES_START_TIMESTAMP=1760015700
+# Optional: capture orderbook snapshots every N blocks (default: latest block only)
+QUOTE_BLOCK_INTERVAL=10
+
+# Optional Grafana credentials
+GF_ADMIN_USER=admin
+GF_ADMIN_PASSWORD=admin123
 ```
 
-## Scripts
+After the first successful collection the latest block/timestamp are persisted in the `metadata` table, so future runs automatically resume from where they stopped.
 
-### pythData.js
+## Local Development
 
-Fetches PriceFeedUpdate events from the Pyth Network contract on Base blockchain.
-
-**Features:**
-- Fetches events using HyperSync API with pagination
-- Decodes price feed data (price, confidence, publish time)
-- Supports multiple stock tickers: GOOG, AMZN, AAPL, MSFT, NVDA, META, GME, MSTR, BRK, SPLG, IAU
-- Filters transactions from specific address (0x08b20026003f3dF0E699D30B76E69C368dd2aa6c)
-- Outputs data to `src/pyth-price-feeds.json`
-
-**Usage:**
 ```bash
-node src/pythData.js
+cd collector
+npm install
+npm run build          # Type-checks and emits dist/
+npm run dev            # Run once without building (tsx)
+# or
+npm run start          # Requires a previous npm run build
 ```
 
-**Configuration:**
-- `START_BLOCK` - Starting block number (default: 36323073)
-- `END_BLOCK` - Ending block number (default: 36649229)
+The collector honours the same `.env` when run locally.
 
-### stoxData.js
+### Available Scripts
 
-Fetches trading orders and trades from the Stox subgraph on Base.
+- `npm run build` – compile TypeScript to `dist/`.
+- `npm run dev` – execute the collector directly with `tsx` (ideal during development).
+- `npm run start` – run the compiled JavaScript from `dist/`.
+- `npm run typecheck` – static type check without emitting output.
 
-**Features:**
-- Fetches all orders with pagination (1000 per request)
-- Fetches all trades with pagination (1000 per request)
-- Filters orders containing specific tSTOX token addresses
-- Combines orders with their corresponding trades
-- Outputs combined data to `src/orders.json`
+`QUOTE_BLOCK_INTERVAL` controls how frequently orderbook snapshots are captured. If unset or `0`, the collector records a single snapshot at the latest head block. When set to a positive integer (for example `10`), it records a snapshot each time that many blocks have elapsed since the most recent stored snapshot.
 
-**Tracked tSTOX tokens:**
-- 0x2289249984f1fa2ce86c4e8867e7eb819ea7df95
-- 0x470b06815a2e286df8c38c9c73280e0760088623
-- 0x32f417da481b9d8d578ebeec54490886b9a1643a
-- 0x8d8c315db61f60dcc3c66cdb48ca87fc643e35ea
-- 0x69fca9f7fad46a7eef3acef5beac9df5b7eca73b
-- 0xff647ad8c4b065bd746911bb9ea1a33c38c63604
-- 0x479d5f41c7c5bac2848a4ed5decbc49159b64f3f
-- 0xd0a90b7c9ae5facbe09ca4c576a3795eda53b397
+## Docker Compose
 
-**Usage:**
 ```bash
-node src/stoxData.js
+docker compose up --build
 ```
 
-**Configuration:**
-- `FROM_TIMESTAMP` - Starting timestamp for filtering (default: 1759567171)
-- `TO_TIMESTAMP` - Ending timestamp for filtering (default: 9999999999)
+Services:
+- `collector` builds from `collector/Dockerfile`, mounts the shared `data` volume, and refreshes the SQLite database on each run.
+- `grafana` exposes port `3000`, preinstalls the SQLite data source plugin, and mounts the same `data` volume read-only so dashboards can read `metrics.db`.
 
-## Output Files
+The collector container exits after finishing a run; configure an external scheduler (cron, systemd timer, etc.) if you need periodic execution.
 
-- `src/pyth-price-feeds.json` - Decoded Pyth price feed updates
-- `src/orders.json` - Filtered Stox orders with their associated trades
+## SQLite Schema
 
-## Data Structure
+- `metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)` – offsets such as `last_pyth_block`, `last_trade_timestamp`, `last_quote_block`, `last_run_at`.
+- `pyth_prices` – raw Pyth updates (ticker, publish time, raw price/confidence, block and tx id).
+- `trades` – executed trades with direction, USDC price, token amounts (raw + decimal adjusted), and metadata.
+- `quotes` – latest quoted liquidity per order/spec pair with inferred direction and price. Records are keyed by `orderHash:inputIndex:outputIndex:blockNumber` so each snapshot is preserved.
 
-### Pyth Price Feed Output
-```json
-{
-  "id": "0x...",
-  "ticker": "AAPL",
-  "publishTime": 1234567890,
-  "price": 15000000,
-  "conf": 100000,
-  "blockNumber": 36323073,
-  "transactionHash": "0x...",
-  "address": "0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a"
-}
-```
+## Grafana Notes
 
-### Stox Orders Output
-```json
-{
-  "orderHash": "0x...",
-  "timestampAdded": "1234567890",
-  "inputs": [...],
-  "outputs": [...],
-  "trades": [
-    {
-      "id": "...",
-      "tradeEvent": {...},
-      "inputVaultBalanceChange": {...},
-      "outputVaultBalanceChange": {...}
-    }
-  ]
-}
-```
-
-## Dependencies
-
-- `axios` - HTTP client for API requests
-- `ethers` - Ethereum utilities for data decoding
-- `dotenv` - Environment variable management
-- `cbor` - CBOR encoding/decoding
-- `csv-parser` - CSV parsing utilities
-- `pako` - Compression library
-
-## License
-
-ISC
+The `frser-sqlite-datasource` plugin expects the database file at `/data/metrics.db`. Point dashboards at the `quotes`, `trades`, or `pyth_prices` tables and use the metadata keys to scope time ranges if required.
