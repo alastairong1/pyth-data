@@ -9,7 +9,7 @@ import {
   getQuoteSnapshotInterval,
   NETWORK_CONFIG
 } from './config.js';
-import { getLatestBlockNumber, unixTimestamp } from './utils.js';
+import { getLatestBlockNumber, unixTimestamp, retryWithBackoff, isSubgraphLagError } from './utils.js';
 import { getMetadata, openDatabase, setMetadata } from './db.js';
 
 dotenv.config();
@@ -64,9 +64,19 @@ async function main(): Promise<void> {
     }
 
     for (const block of quoteBlocks) {
-      const quoteResult = await collectQuotes(db, block);
-      setMetadata(db, 'last_quote_block', String(quoteResult.blockNumber));
-      console.log(`Collected ${quoteResult.count} quotes at block ${quoteResult.blockNumber}`);
+      const quoteResult = await retryWithBackoff(
+        () => collectQuotes(db, block),
+        60_000 // Retry for up to 1 minute
+      );
+
+      if (quoteResult) {
+        setMetadata(db, 'last_quote_block', String(quoteResult.blockNumber));
+        console.log(`Collected ${quoteResult.count} quotes at block ${quoteResult.blockNumber}`);
+      } else {
+        console.warn(
+          `Failed to collect quotes at block ${block} after retries. Subgraph may be lagging. Moving on to next block.`
+        );
+      }
     }
 
     setMetadata(db, 'last_run_at', String(nowTimestamp));

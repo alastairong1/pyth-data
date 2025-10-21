@@ -106,3 +106,43 @@ export function parseNumber(value: string | number | undefined | null): number {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
+
+export function isSubgraphLagError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes('has only indexed up to block');
+}
+
+export async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxDurationMs: number = 60_000,
+  initialDelayMs: number = 1000
+): Promise<T | null> {
+  const startTime = Date.now();
+  let delayMs = initialDelayMs;
+
+  while (Date.now() - startTime < maxDurationMs) {
+    try {
+      return await fn();
+    } catch (error) {
+      const elapsed = Date.now() - startTime;
+      const remaining = maxDurationMs - elapsed;
+
+      if (remaining <= 0) {
+        console.warn('Retry timeout reached, giving up');
+        return null;
+      }
+
+      const waitTime = Math.min(delayMs, remaining);
+      console.warn(
+        `Retry attempt failed (${elapsed}ms elapsed, ${remaining}ms remaining), waiting ${waitTime}ms before retry: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      delayMs = Math.min(delayMs * 1.5, 10_000); // Exponential backoff, max 10s
+    }
+  }
+
+  return null;
+}
