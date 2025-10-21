@@ -53,6 +53,40 @@ export async function getLatestBlockNumber(rpcUrls: string[]): Promise<number> {
   throw new Error('Unable to fetch latest block number from any RPC endpoint');
 }
 
+export async function getBlockTimestamp(blockNumber: number, rpcUrls: string[]): Promise<number | null> {
+  const blockTag = `0x${blockNumber.toString(16)}`;
+
+  for (const url of rpcUrls) {
+    try {
+      const response = await axios.post<{ result?: { timestamp?: string } | null }>(
+        url,
+        {
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'eth_getBlockByNumber',
+          params: [blockTag, false]
+        },
+        { timeout: 10_000 }
+      );
+
+      const timestampHex = response.data?.result?.timestamp;
+      if (!timestampHex) continue;
+
+      const parsed = Number.parseInt(timestampHex, 16);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    } catch (error) {
+      console.warn(
+        `Failed to fetch block ${blockNumber} timestamp from ${url}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  return null;
+}
+
 export function getTokenByAddress(address: string, tokens: Token[]): Token | undefined {
   const target = address.toLowerCase();
   return tokens.find((token) => token.address.toLowerCase() === target);

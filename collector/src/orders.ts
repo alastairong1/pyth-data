@@ -1,12 +1,6 @@
+import axios from 'axios';
 import { AbiCoder } from 'ethers';
-import {
-  doQuoteSpecs,
-  getOrders,
-  type QuoteResultEnum,
-  type QuoteSpec,
-  type SgOrder,
-  type SgOrderWithSubgraphName
-} from '@rainlanguage/orderbook';
+import { doQuoteSpecs, type QuoteResultEnum, type QuoteSpec } from '@rainlanguage/orderbook';
 import { insertQuotes, SqliteDatabase } from './db.js';
 import { NETWORK_CONFIG, STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN } from './config.js';
 import { ProcessedQuote, Direction, Token } from './types.js';
@@ -17,6 +11,77 @@ const OrderV3Type =
   '(address owner, (address interpreter, address store, bytes bytecode) evaluable, (address token, uint8 decimals, uint256 vaultId)[] validInputs, (address token, uint8 decimals, uint256 vaultId)[] validOutputs, bytes32 nonce)';
 
 const trackedTokenAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
+
+interface SubgraphOrderRecord {
+  orderHash: string;
+  orderBytes: string;
+  orderbook: {
+    id: string;
+  };
+}
+
+interface GraphOrdersResponse {
+  data?: {
+    orders: SubgraphOrderRecord[];
+  };
+  errors?: Array<{ message: string }>;
+}
+
+async function fetchActiveOrdersAtBlock(blockNumber: number): Promise<SubgraphOrderRecord[]> {
+  const pageSize = 500;
+  const orders: SubgraphOrderRecord[] = [];
+  const query = `
+    query ActiveOrdersAtBlock($blockNumber: Int!, $first: Int!, $skip: Int!) {
+      orders(
+        first: $first
+        skip: $skip
+        where: { active: true }
+        block: { number: $blockNumber }
+        orderBy: id
+        orderDirection: asc
+      ) {
+        orderHash
+        orderBytes
+        orderbook {
+          id
+        }
+      }
+    }
+  `;
+
+  let skip = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await axios.post<GraphOrdersResponse>(
+      NETWORK_CONFIG.orderbookSubgraphUrl,
+      {
+        query,
+        variables: {
+          blockNumber,
+          first: pageSize,
+          skip
+        }
+      },
+      { timeout: 15_000 }
+    );
+
+    if (response.data.errors && response.data.errors.length > 0) {
+      throw new Error(response.data.errors.map((error) => error.message).join('; '));
+    }
+
+    const pageOrders = response.data.data?.orders ?? [];
+    orders.push(...pageOrders);
+
+    if (pageOrders.length < pageSize) {
+      hasMore = false;
+    } else {
+      skip += pageSize;
+    }
+  }
+
+  return orders;
+}
 
 interface QuoteResultWithSpec {
   result: QuoteResultEnum;
@@ -39,49 +104,10 @@ function determineDirection(inputSymbol: string, outputSymbol: string): Directio
   return null;
 }
 
-async function fetchActiveOrders(): Promise<SgOrderWithSubgraphName[]> {
-  const pageSize = 500;
-  const orders: SgOrderWithSubgraphName[] = [];
-  let page = 1;
-  let hasMore = true;
+function filterOrders(orders: SubgraphOrderRecord[]): SubgraphOrderRecord[] {
+  const filtered: SubgraphOrderRecord[] = [];
 
-  while (hasMore) {
-    const result = await getOrders(
-      [
-        {
-          url: NETWORK_CONFIG.orderbookSubgraphUrl,
-          name: NETWORK_CONFIG.rainIndexNetworkSlug
-        }
-      ],
-      {
-        active: true,
-        owners: []
-      },
-      { page, pageSize }
-    );
-
-    if (result.error) {
-      throw new Error(result.error.readableMsg);
-    }
-
-    const pageOrders = result.value ?? [];
-    orders.push(...pageOrders);
-
-    if (pageOrders.length < pageSize) {
-      hasMore = false;
-    } else {
-      page += 1;
-    }
-  }
-
-  return orders;
-}
-
-function filterOrders(orders: SgOrderWithSubgraphName[]): SgOrderWithSubgraphName[] {
-  const filtered: SgOrderWithSubgraphName[] = [];
-
-  for (const entry of orders) {
-    const { order } = entry;
+  for (const order of orders) {
     try {
       const decodedOrder = abiCoder.decode([OrderV3Type], order.orderBytes);
       const orderData = decodedOrder[0] as any;
@@ -92,7 +118,7 @@ function filterOrders(orders: SgOrderWithSubgraphName[]): SgOrderWithSubgraphNam
       const hasRelevantOutput = outputs.some((addr) => trackedTokenAddresses.has(addr));
 
       if (hasRelevantInput || hasRelevantOutput) {
-        filtered.push(entry);
+        filtered.push(order);
       }
     } catch (error) {
       console.error('Failed to decode order for filtering:', error instanceof Error ? error.message : String(error));
@@ -102,10 +128,10 @@ function filterOrders(orders: SgOrderWithSubgraphName[]): SgOrderWithSubgraphNam
   return filtered;
 }
 
-function createQuoteSpecs(filteredOrders: SgOrderWithSubgraphName[]): QuoteSpec[] {
+function createQuoteSpecs(filteredOrders: SubgraphOrderRecord[]): QuoteSpec[] {
   const specs: QuoteSpec[] = [];
 
-  for (const { order } of filteredOrders) {
+  for (const order of filteredOrders) {
     try {
       const decoded = abiCoder.decode([OrderV3Type], order.orderBytes);
       const orderData = decoded[0] as any;
@@ -188,7 +214,7 @@ async function executeQuotes(
 
 function buildQuote(
   quoteResult: QuoteResultWithSpec,
-  orders: Map<string, SgOrder>,
+  orders: Map<string, SubgraphOrderRecord>,
   blockNumber: number,
   collectedAt: number
 ): ProcessedQuote | null {
@@ -275,22 +301,46 @@ function buildQuote(
   }
 }
 
+export interface QuoteContext {
+  specs: QuoteSpec[];
+  orderMap: Map<string, SubgraphOrderRecord>;
+}
+
+export async function buildQuoteContext(blockNumber: number): Promise<QuoteContext> {
+  const orders = await fetchActiveOrdersAtBlock(blockNumber);
+  const filtered = filterOrders(orders);
+  const specs = createQuoteSpecs(filtered);
+
+  const orderMap = new Map<string, SubgraphOrderRecord>();
+  filtered.forEach((order) => orderMap.set(order.orderHash, order));
+
+  return {
+    specs,
+    orderMap
+  };
+}
+
+export async function fetchQuotesAtBlock(
+  blockNumber: number,
+  collectedAt: number = unixTimestamp(),
+  context?: QuoteContext
+): Promise<ProcessedQuote[]> {
+  const ctx = context ?? (await buildQuoteContext(blockNumber));
+  const quoteResults = await executeQuotes(ctx.specs, blockNumber);
+  const processedQuotes = quoteResults
+    .map((quote) => buildQuote(quote, ctx.orderMap, blockNumber, collectedAt))
+    .filter((quote): quote is ProcessedQuote => Boolean(quote));
+
+  return processedQuotes;
+}
+
 export async function collectQuotes(
   db: SqliteDatabase,
   blockNumber: number
 ): Promise<{ blockNumber: number; count: number }> {
   const collectedAt = unixTimestamp();
-  const orders = await fetchActiveOrders();
-  const filtered = filterOrders(orders);
-  const specs = createQuoteSpecs(filtered);
-
-  const orderMap = new Map<string, SgOrder>();
-  filtered.forEach(({ order }) => orderMap.set(order.orderHash, order));
-
-  const quoteResults = await executeQuotes(specs, blockNumber);
-  const processedQuotes = quoteResults
-    .map((quote) => buildQuote(quote, orderMap, blockNumber, collectedAt))
-    .filter((quote): quote is ProcessedQuote => Boolean(quote));
+  const context = await buildQuoteContext(blockNumber);
+  const processedQuotes = await fetchQuotesAtBlock(blockNumber, collectedAt, context);
 
   insertQuotes(db, processedQuotes);
   return {
