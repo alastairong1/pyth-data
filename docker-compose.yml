@@ -7,7 +7,7 @@ services:
     env_file: .env
     restart: unless-stopped
     volumes:
-      - data:/data
+      - /mnt/volume_nyc3_01:/data
     healthcheck:
       test: ["CMD", "bash", "-lc", "test -f /data/metrics.db && echo ok"]
       interval: 30s
