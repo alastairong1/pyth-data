@@ -24,8 +24,19 @@ export function formatAmount(amount: bigint, decimals: number): number {
 
 export function ensureDirectoryForFile(filePath: string): void {
   const dir = path.dirname(filePath);
+
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
+  }
+
+  try {
+    const stat = fs.statSync(dir);
+    const currentMode = stat.mode & 0o777;
+    if (currentMode !== 0o777) {
+      fs.chmodSync(dir, 0o777);
+    }
+  } catch (error) {
+    console.warn(`Failed to ensure writable directory permissions for ${dir}:`, error);
   }
 }
 

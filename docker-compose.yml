@@ -25,7 +25,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "${GF_ADMIN_PASSWORD:-admin123}"
     volumes:
       - grafana-storage:/var/lib/grafana
-      - /mnt/volume_nyc3_01:/data:ro
+      - /mnt/volume_nyc3_01:/data
 
 volumes:
   grafana-storage:
