@@ -255,7 +255,6 @@ function buildQuote(
       } as Token);
 
     const maxOutput = hexToBigInt(result.value.maxOutput);
-    if (maxOutput === 0n) return null;
 
     const ratio = hexToBigInt(result.value.ratio);
     if (ratio === 0n) return null;

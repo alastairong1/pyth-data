@@ -69,6 +69,12 @@ const QUOTES_TABLE_SQL = `
   );
 `;
 
+const QUOTES_INDEXES_SQL = [
+  'CREATE INDEX IF NOT EXISTS quotes_collected_at_idx ON quotes(collected_at)',
+  'CREATE INDEX IF NOT EXISTS quotes_block_number_idx ON quotes(block_number)',
+  'CREATE INDEX IF NOT EXISTS quotes_order_hash_idx ON quotes(order_hash)'
+];
+
 export function openDatabase(dbPath: string): SqliteDatabase {
   ensureDirectoryForFile(dbPath);
   const originalUmask = process.umask(0o002);
@@ -83,6 +89,10 @@ export function openDatabase(dbPath: string): SqliteDatabase {
     db.exec(PYTH_TABLE_SQL);
     db.exec(TRADES_TABLE_SQL);
     db.exec(QUOTES_TABLE_SQL);
+
+    for (const indexSql of QUOTES_INDEXES_SQL) {
+      db.exec(indexSql);
+    }
 
     return db;
   } finally {
