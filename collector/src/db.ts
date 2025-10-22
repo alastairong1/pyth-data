@@ -76,6 +76,10 @@ export function openDatabase(dbPath: string): SqliteDatabase {
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
+    db.pragma('busy_timeout = 1000');
+    db.pragma('wal_autocheckpoint = 500');
+    db.pragma('cache_size = 10000');
+    db.pragma('mmap_size = 30000000');
     db.pragma('foreign_keys = ON');
 
     db.exec(METADATA_TABLE_SQL);
