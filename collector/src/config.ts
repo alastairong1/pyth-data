@@ -101,34 +101,26 @@ export const STOCK_TOKENS: Token[] = [
   },
   {
     chainId: 8453,
-    address: '0x2289249984f1fa2ce86c4e8867e7eb819ea7df95',
-    symbol: 'tGOOG',
-    decimals: 18,
-    name: 'Alphabet Inc Class C ST0x',
-    category: 'ST0x'
-  },
-  {
-    chainId: 8453,
     address: '0x32f417da481b9d8d578ebeec54490886b9a1643a',
-    symbol: 'tAAPL',
+    symbol: 'tBRK.B',
     decimals: 18,
-    name: 'Apple Inc ST0x',
-    category: 'ST0x'
-  },
-  {
-    chainId: 8453,
-    address: '0x479d5f41c7c5bac2848a4ed5decbc49159b64f3f',
-    symbol: 'tMETA',
-    decimals: 18,
-    name: 'Meta Platforms Inc ST0x',
+    name: 'Berkshire Hathaway Inc ST0x',
     category: 'ST0x'
   },
   {
     chainId: 8453,
     address: '0xd0a90b7c9ae5facbe09ca4c576a3795eda53b397',
-    symbol: 'tMSFT',
+    symbol: 'tIAU',
     decimals: 18,
-    name: 'Microsoft Corp ST0x',
+    name: 'iShares Gold Trust ST0x',
+    category: 'ST0x'
+  },
+  {
+    chainId: 8453,
+    address: '0x2289249984f1fa2ce86c4e8867e7eb819ea7df95',
+    symbol: 'tSPLG',
+    decimals: 18,
+    name: 'SPDR Portfolio S&P 500 ETF ST0x',
     category: 'ST0x'
   }
 ];

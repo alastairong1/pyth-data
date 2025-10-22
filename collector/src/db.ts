@@ -72,7 +72,10 @@ const QUOTES_TABLE_SQL = `
 const QUOTES_INDEXES_SQL = [
   'CREATE INDEX IF NOT EXISTS quotes_collected_at_idx ON quotes(collected_at)',
   'CREATE INDEX IF NOT EXISTS quotes_block_number_idx ON quotes(block_number)',
-  'CREATE INDEX IF NOT EXISTS quotes_order_hash_idx ON quotes(order_hash)'
+  'CREATE INDEX IF NOT EXISTS quotes_order_hash_idx ON quotes(order_hash)',
+  'CREATE INDEX IF NOT EXISTS idx_quotes_owner ON quotes(owner)',
+  'CREATE INDEX IF NOT EXISTS idx_quotes_orderhash_collected ON quotes(order_hash, collected_at)',
+  'CREATE INDEX IF NOT EXISTS idx_quotes_orderhash_maxout ON quotes(order_hash, max_output)'
 ];
 
 export function openDatabase(dbPath: string): SqliteDatabase {
