@@ -38,17 +38,28 @@ services:
       - letsencrypt:/etc/letsencrypt:ro
       - certbot-www:/var/www/certbot:ro
     depends_on:
-      - grafana
+      grafana:
+        condition: service_started
+      certbot:
+        condition: service_healthy
 
   certbot:
     image: certbot/certbot
     restart: unless-stopped
+    ports:
+      - "80:80"
     volumes:
+      - ./certbot-entrypoint.sh:/entrypoint.sh:ro
       - letsencrypt:/etc/letsencrypt
       - certbot-www:/var/www/certbot
-    entrypoint: /bin/sh -c "certbot renew --quiet && trap exit TERM; while :; do sleep 12h & wait $$!; certbot renew --quiet; done"
-    depends_on:
-      - nginx
+    entrypoint: /entrypoint.sh
+    environment:
+      CERTBOT_EMAIL: "${CERTBOT_EMAIL:alastair@st0x.io}"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/letsencrypt/live/ops.st0x.io/fullchain.pem"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   grafana-storage:
