@@ -1,7 +1,7 @@
 import { Token, NetworkConfig } from './types.js';
 
 export const GRAPHQL_ENDPOINT =
-  'https://api.goldsky.com/api/public/project_clv14x04y9kzi01saerx7bxpg/subgraphs/ob4-base/2025-08-18-2744/gn';
+  'https://api.goldsky.com/api/public/project_clv14x04y9kzi01saerx7bxpg/subgraphs/ob4-base/2025-10-11-a62b/gn';
 
 export const HYPERSYNC_CLIENT = 'https://8453.hypersync.xyz/query';
 export const PYTH_CONTRACT = '0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a';
