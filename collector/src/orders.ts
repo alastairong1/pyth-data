@@ -329,9 +329,13 @@ export async function collectQuotes(
   db: SqliteDatabase,
   blockNumber: number
 ): Promise<{ blockNumber: number; count: number }> {
+  console.log(`collectQuotes: Starting collection at block ${blockNumber}`);
   const collectedAt = unixTimestamp();
   const context = await buildQuoteContext(blockNumber);
+  console.log(`collectQuotes: Built context with ${context.specs.length} quote specs from ${context.orderMap.size} orders`);
+
   const processedQuotes = await fetchQuotesAtBlock(blockNumber, collectedAt, context);
+  console.log(`collectQuotes: Processed ${processedQuotes.length} quotes`);
 
   insertQuotes(db, processedQuotes);
   return {

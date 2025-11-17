@@ -88,6 +88,7 @@ export async function collectPythPrices(
 
   while (currentBlock <= targetBlock) {
     try {
+      console.log(`Querying HyperSync for Pyth data: blocks ${currentBlock} to ${targetBlock}`);
       const response = await axios.post<HyperSyncResponse>(HYPERSYNC_CLIENT, {
         from_block: currentBlock,
         to_block: targetBlock,
@@ -110,8 +111,11 @@ export async function collectPythPrices(
       });
 
       const frames = response.data.data ?? [];
+      console.log(`HyperSync returned ${frames.length} frames`);
+
       for (const frame of frames) {
         const logs = frame.logs ?? [];
+        console.log(`Frame has ${logs.length} logs`);
         for (const log of logs) {
           const decoded = decodePriceFeedUpdate(log, collectedAt);
           if (decoded) {
@@ -119,11 +123,14 @@ export async function collectPythPrices(
             if (log.block_number > lastProcessedBlock) {
               lastProcessedBlock = log.block_number;
             }
+          } else {
+            console.warn(`Failed to decode Pyth log at block ${log.block_number}`);
           }
         }
       }
 
       const nextBlock = response.data.next_block;
+      console.log(`Next block from HyperSync: ${nextBlock}`);
       if (!nextBlock || nextBlock <= currentBlock) {
         break;
       }
@@ -132,6 +139,9 @@ export async function collectPythPrices(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('Failed to fetch Pyth data:', message);
+      if (error instanceof Error && error.stack) {
+        console.error('Stack trace:', error.stack);
+      }
       break;
     }
   }

@@ -50,11 +50,7 @@ export const DEFAULT_TRADES_START_TIMESTAMP = 0;
 export const DEFAULT_QUOTE_BLOCK_INTERVAL = 0;
 
 export const DEFAULT_RPC_URLS: string[] = [
-  'https://base-rpc.publicnode.com',
   'https://mainnet.base.org',
-  'https://base.llamarpc.com',
-  'https://base.meowrpc.com',
-  'https://base-mainnet.public.blastapi.io',
   'https://gateway.tenderly.co/public/base'
 ];
 

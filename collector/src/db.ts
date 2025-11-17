@@ -181,7 +181,14 @@ export function insertTrades(db: SqliteDatabase, trades: ProcessedTrade[]): void
 }
 
 export function insertQuotes(db: SqliteDatabase, quotes: ProcessedQuote[]): void {
-  if (quotes.length === 0) return;
+  if (quotes.length === 0) {
+    console.log('insertQuotes: No quotes to insert');
+    return;
+  }
+
+  console.log(`insertQuotes: Inserting ${quotes.length} quotes`);
+  console.log(`First quote: block=${quotes[0].blockNumber}, token=${quotes[0].inputTokenSymbol}/${quotes[0].outputTokenSymbol}, price=${quotes[0].price}`);
+
   const insert = db.prepare(
     `INSERT OR REPLACE INTO quotes (
       id, order_hash, owner, direction, price, ratio_raw, max_output_raw, max_output,
@@ -192,7 +199,7 @@ export function insertQuotes(db: SqliteDatabase, quotes: ProcessedQuote[]): void
 
   const transaction = db.transaction((rows: ProcessedQuote[]) => {
     for (const row of rows) {
-      insert.run(
+      const result = insert.run(
         row.quoteId,
         row.orderHash,
         row.owner,
@@ -210,8 +217,10 @@ export function insertQuotes(db: SqliteDatabase, quotes: ProcessedQuote[]): void
         row.blockNumber,
         row.collectedAt
       );
+      console.log(`Inserted quote ${row.quoteId}, changes=${result.changes}`);
     }
   });
 
   transaction(quotes);
+  console.log(`insertQuotes: Transaction completed`);
 }
