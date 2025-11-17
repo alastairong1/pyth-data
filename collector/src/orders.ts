@@ -131,22 +131,39 @@ export async function collectQuotes(
     // Get active orders filtered by our tracked tokens
     console.log(`Fetching orders with tracked tokens...`);
     const tokenAddresses = TRACKED_TOKENS.map(t => t.address as `0x${string}`);
-    const ordersResult = await client.getOrders(
-      [NETWORK_CONFIG.chainId],
-      {
-        owners: [],  // Empty array means all owners
-        tokens: tokenAddresses
-      },
-      { page: 1, pageSize: 1000 }
-    );
 
-    if (ordersResult.error || !ordersResult.value) {
-      console.error('Failed to fetch orders:', ordersResult.error?.readableMsg ?? 'Unknown error');
-      return { blockNumber, count: 0 };
+    // Fetch all pages of orders
+    const allOrders: RaindexOrder[] = [];
+    let page = 1;
+    let hasMore = true;
+    const maxPages = 10;
+
+    while (hasMore && page <= maxPages) {
+      const ordersResult = await client.getOrders(
+        [NETWORK_CONFIG.chainId],
+        {
+          owners: [],  // Empty array means all owners
+          tokens: tokenAddresses
+        },
+        page
+      );
+
+      if (ordersResult.error || !ordersResult.value) {
+        console.error('Failed to fetch orders:', ordersResult.error?.readableMsg ?? 'Unknown error');
+        break;
+      }
+
+      const pageOrders = ordersResult.value;
+      allOrders.push(...pageOrders);
+      console.log(`collectQuotes: Fetched page ${page} with ${pageOrders.length} orders`);
+
+      // If we got fewer than expected, we've reached the end
+      hasMore = pageOrders.length >= 100; // Assuming default page size
+      page++;
     }
 
-    const orders = ordersResult.value;
-    console.log(`collectQuotes: Fetched ${orders.length} orders`);
+    console.log(`collectQuotes: Total ${allOrders.length} orders fetched`);
+    const orders = allOrders;
 
     const processedQuotes: ProcessedQuote[] = [];
 
