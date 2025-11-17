@@ -41,6 +41,9 @@ export function ensureDirectoryForFile(filePath: string): void {
 }
 
 export async function getLatestBlockNumber(rpcUrls: string[]): Promise<number> {
+  let maxBlock = 0;
+  let successCount = 0;
+
   for (const url of rpcUrls) {
     try {
       const response = await axios.post<{ result: string }>(
@@ -57,13 +60,22 @@ export async function getLatestBlockNumber(rpcUrls: string[]): Promise<number> {
       if (!hex) continue;
       const blockNumber = Number.parseInt(hex, 16);
       console.log(`RPC ${url.slice(0, 40)}... returned block: ${blockNumber}`);
-      return blockNumber;
+
+      if (blockNumber > maxBlock) {
+        maxBlock = blockNumber;
+      }
+      successCount++;
     } catch (error) {
       console.warn(`Failed to get latest block from ${url}:`, error instanceof Error ? error.message : String(error));
     }
   }
 
-  throw new Error('Unable to fetch latest block number from any RPC endpoint');
+  if (successCount === 0) {
+    throw new Error('Unable to fetch latest block number from any RPC endpoint');
+  }
+
+  console.log(`Using highest block from ${successCount} successful RPCs: ${maxBlock}`);
+  return maxBlock;
 }
 
 export async function getBlockTimestamp(blockNumber: number, rpcUrls: string[]): Promise<number | null> {
