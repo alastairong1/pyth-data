@@ -1,103 +1,12 @@
-import axios from 'axios';
-import { AbiCoder } from 'ethers';
-import { doQuoteSpecs, type QuoteResultEnum, type QuoteSpec } from '@rainlanguage/orderbook';
+import { Float } from '@rainlanguage/float';
+import type { RaindexOrder, RaindexOrderQuote } from '@rainlanguage/orderbook';
 import { insertQuotes, SqliteDatabase } from './db.js';
-import { NETWORK_CONFIG, STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN } from './config.js';
+import { STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN } from './config.js';
 import { ProcessedQuote, Direction, Token } from './types.js';
-import { buildQuoteId, formatAmount, getTokenByAddress, hexToBigInt, unixTimestamp } from './utils.js';
-
-const abiCoder = AbiCoder.defaultAbiCoder();
-const IOV2 = '(address token, bytes32 vaultId)';
-const EvaluableV4 = '(address interpreter, address store, bytes bytecode)';
-const OrderV4Type = `(address owner, ${EvaluableV4} evaluable, ${IOV2}[] validInputs, ${IOV2}[] validOutputs, bytes32 nonce)`;
+import { buildQuoteId, formatAmount, getTokenByAddress, unixTimestamp } from './utils.js';
+import { createRaindexClient } from './raindexClient.js';
 
 const trackedTokenAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
-
-interface SubgraphOrderRecord {
-  orderHash: string;
-  orderBytes: string;
-  orderbook: {
-    id: string;
-  };
-}
-
-interface GraphOrdersResponse {
-  data?: {
-    orders: SubgraphOrderRecord[];
-  };
-  errors?: Array<{ message: string }>;
-}
-
-async function fetchActiveOrdersAtBlock(blockNumber: number): Promise<SubgraphOrderRecord[]> {
-  const pageSize = 500;
-  const orders: SubgraphOrderRecord[] = [];
-  const query = `
-    query ActiveOrdersAtBlock($blockNumber: Int!, $first: Int!, $skip: Int!) {
-      orders(
-        first: $first
-        skip: $skip
-        where: { active: true }
-        block: { number: $blockNumber }
-        orderBy: id
-        orderDirection: asc
-      ) {
-        orderHash
-        orderBytes
-        orderbook {
-          id
-        }
-      }
-    }
-  `;
-
-  let skip = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    const response = await axios.post<GraphOrdersResponse>(
-      NETWORK_CONFIG.orderbookSubgraphUrl,
-      {
-        query,
-        variables: {
-          blockNumber,
-          first: pageSize,
-          skip
-        }
-      },
-      { timeout: 15_000 }
-    );
-
-    if (response.data.errors && response.data.errors.length > 0) {
-      throw new Error(response.data.errors.map((error) => error.message).join('; '));
-    }
-
-    const pageOrders = response.data.data?.orders ?? [];
-    orders.push(...pageOrders);
-
-    if (pageOrders.length < pageSize) {
-      hasMore = false;
-    } else {
-      skip += pageSize;
-    }
-  }
-
-  return orders;
-}
-
-interface QuoteResultWithSpec {
-  result: QuoteResultEnum;
-  spec: QuoteSpec;
-}
-
-function parseDecimals(value: unknown, fallback = 18): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'bigint') return Number(value);
-  if (typeof value === 'string') {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
 
 function determineDirection(inputSymbol: string, outputSymbol: string): Direction | null {
   if (inputSymbol.toUpperCase() === USDC_TOKEN.symbol) return 'SELL';
@@ -105,157 +14,44 @@ function determineDirection(inputSymbol: string, outputSymbol: string): Directio
   return null;
 }
 
-function filterOrders(orders: SubgraphOrderRecord[]): SubgraphOrderRecord[] {
-  const filtered: SubgraphOrderRecord[] = [];
-
-  for (const order of orders) {
-    try {
-      const decodedOrder = abiCoder.decode([OrderV4Type], order.orderBytes);
-      const orderData = decodedOrder[0] as any;
-      const inputs: string[] = orderData.validInputs.map((input: { token: string }) => input.token.toLowerCase());
-      const outputs: string[] = orderData.validOutputs.map((output: { token: string }) => output.token.toLowerCase());
-
-      const hasRelevantInput = inputs.some((addr) => trackedTokenAddresses.has(addr));
-      const hasRelevantOutput = outputs.some((addr) => trackedTokenAddresses.has(addr));
-
-      if (hasRelevantInput || hasRelevantOutput) {
-        filtered.push(order);
-      }
-    } catch (error) {
-      console.error('Failed to decode order for filtering:', error instanceof Error ? error.message : String(error));
+function parseFloatToNumber(floatHex: string): number {
+  try {
+    if (!floatHex.startsWith('0x') || floatHex.length !== 66) {
+      console.warn(`Invalid Float hex format: ${floatHex}`);
+      return 0;
     }
+    const floatResult = Float.fromHex(floatHex as `0x${string}`);
+    if (floatResult.error || !floatResult.value) {
+      console.warn(`Failed to parse Float: ${floatResult.error?.readableMsg}`);
+      return 0;
+    }
+    const formatted = floatResult.value.format();
+    return Number.parseFloat(formatted.value.toString());
+  } catch (error) {
+    console.error('Error parsing Float:', error);
+    return 0;
   }
-
-  return filtered;
 }
 
-function createQuoteSpecs(filteredOrders: SubgraphOrderRecord[]): QuoteSpec[] {
-  const specs: QuoteSpec[] = [];
-
-  for (const order of filteredOrders) {
-    try {
-      const decoded = abiCoder.decode([OrderV4Type], order.orderBytes);
-      const orderData = decoded[0] as any;
-      const inputTokens = orderData.validInputs.map((input: { token: string }) => input.token.toLowerCase());
-      const outputTokens = orderData.validOutputs.map((output: { token: string }) => output.token.toLowerCase());
-
-      STOCK_TOKENS.forEach((token) => {
-        const stockAddr = token.address.toLowerCase();
-        const usdcAddr = USDC_TOKEN.address.toLowerCase();
-
-        const usdcInputIndex = inputTokens.findIndex((addr: string) => addr === usdcAddr);
-        const stockOutputIndex = outputTokens.findIndex((addr: string) => addr === stockAddr);
-
-        if (usdcInputIndex !== -1 && stockOutputIndex !== -1) {
-          specs.push({
-            orderHash: order.orderHash,
-            inputIOIndex: usdcInputIndex,
-            outputIOIndex: stockOutputIndex,
-            signedContext: [],
-            orderbook: order.orderbook.id
-          });
-        }
-
-        const stockInputIndex = inputTokens.findIndex((addr: string) => addr === stockAddr);
-        const usdcOutputIndex = outputTokens.findIndex((addr: string) => addr === usdcAddr);
-
-        if (stockInputIndex !== -1 && usdcOutputIndex !== -1) {
-          specs.push({
-            orderHash: order.orderHash,
-            inputIOIndex: stockInputIndex,
-            outputIOIndex: usdcOutputIndex,
-            signedContext: [],
-            orderbook: order.orderbook.id
-          });
-        }
-      });
-    } catch (error) {
-      console.error('Failed to decode order for specs:', error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  return specs;
-}
-
-async function executeQuotes(
-  specs: QuoteSpec[],
-  blockNumber: number
-): Promise<QuoteResultWithSpec[]> {
-  const batchSize = 50;
-  const results: QuoteResultWithSpec[] = [];
-
-  console.log(`executeQuotes: Processing ${specs.length} specs in batches of ${batchSize}`);
-
-  for (let i = 0; i < specs.length; i += batchSize) {
-    const batch = specs.slice(i, i + batchSize);
-    console.log(`executeQuotes: Processing batch ${i / batchSize + 1}, specs ${i + 1}-${i + batch.length}`);
-
-    try {
-      const response = await doQuoteSpecs(
-        batch,
-        NETWORK_CONFIG.orderbookSubgraphUrl,
-        NETWORK_CONFIG.fallbackRpcUrls,
-        BigInt(blockNumber)
-      );
-
-      if (response.error || !response.value) {
-        console.error('Quote batch failed:', response.error?.readableMsg ?? 'Unknown error');
-        if (response.error) {
-          console.error('Full error:', JSON.stringify(response.error, null, 2));
-        }
-        continue;
-      }
-
-      console.log(`executeQuotes: Batch returned ${response.value.length} results`);
-
-      response.value.forEach((result, index) => {
-        const spec = batch[index];
-        if (spec) {
-          if (result.error) {
-            console.warn(`Quote failed for order ${spec.orderHash}: ${result.error.readableMsg ?? 'Unknown error'}`);
-          } else {
-            console.log(`Quote success for order ${spec.orderHash}: maxOutput=${result.value?.maxOutput}, ratio=${result.value?.ratio}`);
-          }
-          results.push({ result, spec });
-        }
-      });
-    } catch (error) {
-      console.error('Quote batch threw:', error instanceof Error ? error.message : String(error));
-      if (error instanceof Error && error.stack) {
-        console.error('Stack:', error.stack);
-      }
-    }
-  }
-
-  console.log(`executeQuotes: Returning ${results.length} total results`);
-  return results;
-}
-
-function buildQuote(
-  quoteResult: QuoteResultWithSpec,
-  orders: Map<string, SubgraphOrderRecord>,
+function buildQuoteFromRaindex(
+  order: RaindexOrder,
+  quote: RaindexOrderQuote,
   blockNumber: number,
   collectedAt: number
 ): ProcessedQuote | null {
-  const { result, spec } = quoteResult;
-  if (result.error || !result.value) return null;
-
-  const order = orders.get(spec.orderHash);
-  if (!order) return null;
-
   try {
-    const decoded = abiCoder.decode([OrderV4Type], order.orderBytes);
-    const orderData = decoded[0] as any;
-    const owner = orderData.owner as string;
-    const inputDefinition = orderData.validInputs[spec.inputIOIndex];
-    const outputDefinition = orderData.validOutputs[spec.outputIOIndex];
+    const inputIOIndex = quote.pair.inputIndex;
+    const outputIOIndex = quote.pair.outputIndex;
 
-    if (!inputDefinition || !outputDefinition) return null;
+    // Get token addresses from order's validInputs/validOutputs
+    const inputAddress = order.validInputs[inputIOIndex]?.token?.address;
+    const outputAddress = order.validOutputs[outputIOIndex]?.token?.address;
 
-    const inputAddress = inputDefinition.token as string;
-    const outputAddress = outputDefinition.token as string;
+    if (!inputAddress || !outputAddress) {
+      console.warn(`Missing token addresses for order ${order.orderHash}`);
+      return null;
+    }
 
-    // OrderV4 doesn't include decimals in the IO struct, so we must look them up
     const inputTokenMeta = getTokenByAddress(inputAddress, TRACKED_TOKENS);
     const outputTokenMeta = getTokenByAddress(outputAddress, TRACKED_TOKENS);
 
@@ -264,42 +60,36 @@ function buildQuote(
       return null;
     }
 
-    const maxOutput = hexToBigInt(result.value.maxOutput);
-
-    const ratio = hexToBigInt(result.value.ratio);
-    if (ratio === 0n) return null;
-
-    const ratioFloat = Number(ratio) / 1e18;
-    if (!Number.isFinite(ratioFloat) || ratioFloat <= 0) return null;
-
-    const inputSymbol = inputTokenMeta.symbol;
-    const outputSymbol = outputTokenMeta.symbol;
-    const direction = determineDirection(inputSymbol, outputSymbol);
+    const direction = determineDirection(inputTokenMeta.symbol, outputTokenMeta.symbol);
     if (!direction) return null;
+
+    // Parse Float values
+    const ratio = parseFloatToNumber(quote.data.ratio);
+    const maxOutput = parseFloatToNumber(quote.data.maxOutput);
+
+    if (ratio === 0) return null;
 
     let price: number;
     if (direction === 'SELL') {
-      price = ratioFloat;
+      price = ratio;
     } else {
-      price = 1 / ratioFloat;
+      price = 1 / ratio;
     }
 
-    const maxOutputNumber = formatAmount(maxOutput, outputTokenMeta.decimals);
-
     return {
-      quoteId: buildQuoteId(order.orderHash, spec.inputIOIndex, spec.outputIOIndex, blockNumber),
+      quoteId: buildQuoteId(order.orderHash, inputIOIndex, outputIOIndex, blockNumber),
       orderHash: order.orderHash,
-      owner,
-      inputTokenSymbol: inputSymbol,
-      outputTokenSymbol: outputSymbol,
+      owner: order.owner,
+      inputTokenSymbol: inputTokenMeta.symbol,
+      outputTokenSymbol: outputTokenMeta.symbol,
       inputTokenAddress: inputAddress,
       outputTokenAddress: outputAddress,
       inputTokenDecimals: inputTokenMeta.decimals,
       outputTokenDecimals: outputTokenMeta.decimals,
-      ratioRaw: result.value.ratio,
+      ratioRaw: quote.data.ratio,
       price,
-      maxOutputRaw: result.value.maxOutput,
-      maxOutput: maxOutputNumber,
+      maxOutputRaw: quote.data.maxOutput,
+      maxOutput,
       direction,
       blockNumber,
       collectedAt
@@ -310,69 +100,68 @@ function buildQuote(
   }
 }
 
-export interface QuoteContext {
-  specs: QuoteSpec[];
-  orderMap: Map<string, SubgraphOrderRecord>;
-}
-
-export async function buildQuoteContext(blockNumber: number): Promise<QuoteContext> {
-  const orders = await fetchActiveOrdersAtBlock(blockNumber);
-  const filtered = filterOrders(orders);
-  const specs = createQuoteSpecs(filtered);
-
-  const orderMap = new Map<string, SubgraphOrderRecord>();
-  filtered.forEach((order) => orderMap.set(order.orderHash, order));
-
-  return {
-    specs,
-    orderMap
-  };
-}
-
-export async function fetchQuotesAtBlock(
-  blockNumber: number,
-  collectedAt: number = unixTimestamp(),
-  context?: QuoteContext
-): Promise<ProcessedQuote[]> {
-  const ctx = context ?? (await buildQuoteContext(blockNumber));
-  const quoteResults = await executeQuotes(ctx.specs, blockNumber);
-
-  console.log(`fetchQuotesAtBlock: Building quotes from ${quoteResults.length} quote results`);
-
-  let successCount = 0;
-  let failCount = 0;
-
-  const processedQuotes = quoteResults
-    .map((quote) => {
-      const built = buildQuote(quote, ctx.orderMap, blockNumber, collectedAt);
-      if (built) {
-        successCount++;
-      } else {
-        failCount++;
-      }
-      return built;
-    })
-    .filter((quote): quote is ProcessedQuote => Boolean(quote));
-
-  console.log(`fetchQuotesAtBlock: Built ${successCount} quotes, ${failCount} failed to build`);
-  return processedQuotes;
-}
-
 export async function collectQuotes(
   db: SqliteDatabase,
   blockNumber: number
 ): Promise<{ blockNumber: number; count: number }> {
   console.log(`collectQuotes: Starting collection at block ${blockNumber}`);
   const collectedAt = unixTimestamp();
-  const context = await buildQuoteContext(blockNumber);
-  console.log(`collectQuotes: Built context with ${context.specs.length} quote specs from ${context.orderMap.size} orders`);
 
-  const processedQuotes = await fetchQuotesAtBlock(blockNumber, collectedAt, context);
-  console.log(`collectQuotes: Processed ${processedQuotes.length} quotes`);
+  try {
+    const client = await createRaindexClient();
 
-  insertQuotes(db, processedQuotes);
-  return {
-    blockNumber,
-    count: processedQuotes.length
-  };
+    // Get active orders filtered by our tracked tokens
+    console.log(`Fetching orders with tracked tokens...`);
+    const ordersResult = await client.getOrders({
+      active: true,
+      tokens: TRACKED_TOKENS.map(t => ({ address: t.address, chainId: t.chainId }))
+    });
+
+    if (ordersResult.error || !ordersResult.value) {
+      console.error('Failed to fetch orders:', ordersResult.error?.readableMsg ?? 'Unknown error');
+      return { blockNumber, count: 0 };
+    }
+
+    const orders = ordersResult.value;
+    console.log(`collectQuotes: Fetched ${orders.length} orders`);
+
+    const processedQuotes: ProcessedQuote[] = [];
+
+    // Get quotes for each order
+    for (const order of orders) {
+      try {
+        const quotesResult = await order.getQuotes();
+
+        if (quotesResult.error) {
+          console.warn(`Quote failed for order ${order.orderHash}: ${quotesResult.error.readableMsg}`);
+          continue;
+        }
+
+        if (!quotesResult.value || quotesResult.value.length === 0) {
+          continue;
+        }
+
+        // Process each quote from this order
+        for (const quote of quotesResult.value) {
+          const processed = buildQuoteFromRaindex(order, quote, blockNumber, collectedAt);
+          if (processed) {
+            processedQuotes.push(processed);
+          }
+        }
+      } catch (error) {
+        console.error(`Error getting quotes for order ${order.orderHash}:`, error);
+      }
+    }
+
+    console.log(`collectQuotes: Processed ${processedQuotes.length} quotes`);
+
+    insertQuotes(db, processedQuotes);
+    return {
+      blockNumber,
+      count: processedQuotes.length
+    };
+  } catch (error) {
+    console.error('collectQuotes failed:', error instanceof Error ? error.message : String(error));
+    return { blockNumber, count: 0 };
+  }
 }
