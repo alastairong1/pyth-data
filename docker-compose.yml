@@ -46,8 +46,8 @@ services:
   certbot:
     image: certbot/certbot
     restart: unless-stopped
-    ports:
-      - "80:80"
+    # ports:
+    #   - "80:80"
     volumes:
       - ./certbot-entrypoint.sh:/entrypoint.sh:ro
       - letsencrypt:/etc/letsencrypt
