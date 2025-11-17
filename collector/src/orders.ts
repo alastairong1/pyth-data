@@ -2,9 +2,9 @@ import { Float } from '@rainlanguage/float';
 import type { RaindexOrder, RaindexOrderQuote } from '@rainlanguage/orderbook';
 import { insertQuotes, SqliteDatabase } from './db.js';
 import { STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN } from './config.js';
-import { ProcessedQuote, Direction, Token } from './types.js';
-import { buildQuoteId, formatAmount, getTokenByAddress, unixTimestamp } from './utils.js';
-import { createRaindexClient } from './raindexClient.js';
+import { ProcessedQuote, Direction } from './types.js';
+import { buildQuoteId, getTokenByAddress, unixTimestamp } from './utils.js';
+import { createRaindexClient } from './raindexClient.ts';
 
 const trackedTokenAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
 
@@ -26,6 +26,10 @@ function parseFloatToNumber(floatHex: string): number {
       return 0;
     }
     const formatted = floatResult.value.format();
+    if (!formatted.value) {
+      console.warn('Float format returned undefined value');
+      return 0;
+    }
     return Number.parseFloat(formatted.value.toString());
   } catch (error) {
     console.error('Error parsing Float:', error);
@@ -40,12 +44,18 @@ function buildQuoteFromRaindex(
   collectedAt: number
 ): ProcessedQuote | null {
   try {
+    if (!quote.data) {
+      console.warn(`Quote data is missing for order ${order.orderHash}`);
+      return null;
+    }
+
     const inputIOIndex = quote.pair.inputIndex;
     const outputIOIndex = quote.pair.outputIndex;
 
-    // Get token addresses from order's validInputs/validOutputs
-    const inputAddress = order.validInputs[inputIOIndex]?.token?.address;
-    const outputAddress = order.validOutputs[outputIOIndex]?.token?.address;
+    // Get token addresses from order's orderDetails
+    const orderDetails = order.orderDetails as any;
+    const inputAddress = orderDetails?.validInputs?.[inputIOIndex]?.token?.address;
+    const outputAddress = orderDetails?.validOutputs?.[outputIOIndex]?.token?.address;
 
     if (!inputAddress || !outputAddress) {
       console.warn(`Missing token addresses for order ${order.orderHash}`);
