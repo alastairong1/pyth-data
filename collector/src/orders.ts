@@ -184,8 +184,12 @@ async function executeQuotes(
   const batchSize = 50;
   const results: QuoteResultWithSpec[] = [];
 
+  console.log(`executeQuotes: Processing ${specs.length} specs in batches of ${batchSize}`);
+
   for (let i = 0; i < specs.length; i += batchSize) {
     const batch = specs.slice(i, i + batchSize);
+    console.log(`executeQuotes: Processing batch ${i / batchSize + 1}, specs ${i + 1}-${i + batch.length}`);
+
     try {
       const response = await doQuoteSpecs(
         batch,
@@ -196,20 +200,34 @@ async function executeQuotes(
 
       if (response.error || !response.value) {
         console.error('Quote batch failed:', response.error?.readableMsg ?? 'Unknown error');
+        if (response.error) {
+          console.error('Full error:', JSON.stringify(response.error, null, 2));
+        }
         continue;
       }
+
+      console.log(`executeQuotes: Batch returned ${response.value.length} results`);
 
       response.value.forEach((result, index) => {
         const spec = batch[index];
         if (spec) {
+          if (result.error) {
+            console.warn(`Quote failed for order ${spec.orderHash}: ${result.error.readableMsg ?? 'Unknown error'}`);
+          } else {
+            console.log(`Quote success for order ${spec.orderHash}: maxOutput=${result.value?.maxOutput}, ratio=${result.value?.ratio}`);
+          }
           results.push({ result, spec });
         }
       });
     } catch (error) {
       console.error('Quote batch threw:', error instanceof Error ? error.message : String(error));
+      if (error instanceof Error && error.stack) {
+        console.error('Stack:', error.stack);
+      }
     }
   }
 
+  console.log(`executeQuotes: Returning ${results.length} total results`);
   return results;
 }
 
@@ -318,10 +336,25 @@ export async function fetchQuotesAtBlock(
 ): Promise<ProcessedQuote[]> {
   const ctx = context ?? (await buildQuoteContext(blockNumber));
   const quoteResults = await executeQuotes(ctx.specs, blockNumber);
+
+  console.log(`fetchQuotesAtBlock: Building quotes from ${quoteResults.length} quote results`);
+
+  let successCount = 0;
+  let failCount = 0;
+
   const processedQuotes = quoteResults
-    .map((quote) => buildQuote(quote, ctx.orderMap, blockNumber, collectedAt))
+    .map((quote) => {
+      const built = buildQuote(quote, ctx.orderMap, blockNumber, collectedAt);
+      if (built) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+      return built;
+    })
     .filter((quote): quote is ProcessedQuote => Boolean(quote));
 
+  console.log(`fetchQuotesAtBlock: Built ${successCount} quotes, ${failCount} failed to build`);
   return processedQuotes;
 }
 
