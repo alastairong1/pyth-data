@@ -54,8 +54,9 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const trackedAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
 const PAGE_SIZE = 1000;
 
-const ORDER_V3_ABI =
-  '(address owner, (address interpreter, address store, bytes bytecode) evaluable, (address token, uint8 decimals, uint256 vaultId)[] validInputs, (address token, uint8 decimals, uint256 vaultId)[] validOutputs, bytes32 nonce)';
+const IOV2 = '(address token, bytes32 vaultId)';
+const EvaluableV4 = '(address interpreter, address store, bytes bytecode)';
+const ORDER_V4_ABI = `(address owner, ${EvaluableV4} evaluable, ${IOV2}[] validInputs, ${IOV2}[] validOutputs, bytes32 nonce)`;
 
 function buildTradesQuery(skip: number, fromTimestamp: number, toTimestamp: number): string {
   return `{
@@ -120,7 +121,7 @@ function parseDecimals(value: number | string | undefined | null): number {
 function extractOwnerFromOrderBytes(orderBytes?: string | null): string | null {
   if (!orderBytes) return null;
   try {
-    const decoded = abiCoder.decode([ORDER_V3_ABI], orderBytes);
+    const decoded = abiCoder.decode([ORDER_V4_ABI], orderBytes);
     const owner = decoded?.[0]?.owner as string | undefined;
     return owner ?? null;
   } catch (error) {

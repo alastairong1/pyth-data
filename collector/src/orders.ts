@@ -7,8 +7,9 @@ import { ProcessedQuote, Direction, Token } from './types.js';
 import { buildQuoteId, formatAmount, getTokenByAddress, hexToBigInt, unixTimestamp } from './utils.js';
 
 const abiCoder = AbiCoder.defaultAbiCoder();
-const OrderV3Type =
-  '(address owner, (address interpreter, address store, bytes bytecode) evaluable, (address token, uint8 decimals, uint256 vaultId)[] validInputs, (address token, uint8 decimals, uint256 vaultId)[] validOutputs, bytes32 nonce)';
+const IOV2 = '(address token, bytes32 vaultId)';
+const EvaluableV4 = '(address interpreter, address store, bytes bytecode)';
+const OrderV4Type = `(address owner, ${EvaluableV4} evaluable, ${IOV2}[] validInputs, ${IOV2}[] validOutputs, bytes32 nonce)`;
 
 const trackedTokenAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
 
@@ -109,7 +110,7 @@ function filterOrders(orders: SubgraphOrderRecord[]): SubgraphOrderRecord[] {
 
   for (const order of orders) {
     try {
-      const decodedOrder = abiCoder.decode([OrderV3Type], order.orderBytes);
+      const decodedOrder = abiCoder.decode([OrderV4Type], order.orderBytes);
       const orderData = decodedOrder[0] as any;
       const inputs: string[] = orderData.validInputs.map((input: { token: string }) => input.token.toLowerCase());
       const outputs: string[] = orderData.validOutputs.map((output: { token: string }) => output.token.toLowerCase());
@@ -133,7 +134,7 @@ function createQuoteSpecs(filteredOrders: SubgraphOrderRecord[]): QuoteSpec[] {
 
   for (const order of filteredOrders) {
     try {
-      const decoded = abiCoder.decode([OrderV3Type], order.orderBytes);
+      const decoded = abiCoder.decode([OrderV4Type], order.orderBytes);
       const orderData = decoded[0] as any;
       const inputTokens = orderData.validInputs.map((input: { token: string }) => input.token.toLowerCase());
       const outputTokens = orderData.validOutputs.map((output: { token: string }) => output.token.toLowerCase());
@@ -225,7 +226,7 @@ function buildQuote(
   if (!order) return null;
 
   try {
-    const decoded = abiCoder.decode([OrderV3Type], order.orderBytes);
+    const decoded = abiCoder.decode([OrderV4Type], order.orderBytes);
     const orderData = decoded[0] as any;
     const owner = orderData.owner as string;
     const inputDefinition = orderData.validInputs[spec.inputIOIndex];
@@ -236,23 +237,14 @@ function buildQuote(
     const inputAddress = inputDefinition.token as string;
     const outputAddress = outputDefinition.token as string;
 
-    const inputTokenMeta =
-      getTokenByAddress(inputAddress, TRACKED_TOKENS) ??
-      ({
-        address: inputAddress,
-        symbol: inputDefinition.token,
-        name: inputDefinition.token,
-        decimals: parseDecimals(inputDefinition.decimals)
-      } as Token);
+    // OrderV4 doesn't include decimals in the IO struct, so we must look them up
+    const inputTokenMeta = getTokenByAddress(inputAddress, TRACKED_TOKENS);
+    const outputTokenMeta = getTokenByAddress(outputAddress, TRACKED_TOKENS);
 
-    const outputTokenMeta =
-      getTokenByAddress(outputAddress, TRACKED_TOKENS) ??
-      ({
-        address: outputAddress,
-        symbol: outputDefinition.token,
-        name: outputDefinition.token,
-        decimals: parseDecimals(outputDefinition.decimals)
-      } as Token);
+    if (!inputTokenMeta || !outputTokenMeta) {
+      console.warn(`Token not found in TRACKED_TOKENS: input=${inputAddress}, output=${outputAddress}`);
+      return null;
+    }
 
     const maxOutput = hexToBigInt(result.value.maxOutput);
 

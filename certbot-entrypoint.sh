@@ -2,7 +2,7 @@
 set -e
 
 DOMAIN="ops.st0x.io"
-EMAIL="${CERTBOT_EMAIL:alastair@st0x.io}"
+EMAIL="${CERTBOT_EMAIL:-alastair@st0x.io}"
 CERT_PATH="/etc/letsencrypt/live/$DOMAIN"
 
 echo "Starting certbot handler..."

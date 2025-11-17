@@ -54,7 +54,7 @@ services:
       - certbot-www:/var/www/certbot
     entrypoint: /entrypoint.sh
     environment:
-      CERTBOT_EMAIL: "${CERTBOT_EMAIL:alastair@st0x.io}"
+      CERTBOT_EMAIL: "${CERTBOT_EMAIL:-alastair@st0x.io}"
     healthcheck:
       test: ["CMD", "test", "-f", "/etc/letsencrypt/live/ops.st0x.io/fullchain.pem"]
       interval: 10s
