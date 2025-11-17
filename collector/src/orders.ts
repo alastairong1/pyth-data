@@ -133,7 +133,10 @@ export async function collectQuotes(
     const tokenAddresses = TRACKED_TOKENS.map(t => t.address as `0x${string}`);
     const ordersResult = await client.getOrders(
       [NETWORK_CONFIG.chainId],
-      { tokens: tokenAddresses },
+      {
+        owners: [],  // Empty array means all owners
+        tokens: tokenAddresses
+      },
       { page: 1, pageSize: 1000 }
     );
 
