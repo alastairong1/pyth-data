@@ -55,7 +55,9 @@ export async function getLatestBlockNumber(rpcUrls: string[]): Promise<number> {
       );
       const hex = response.data?.result;
       if (!hex) continue;
-      return Number.parseInt(hex, 16);
+      const blockNumber = Number.parseInt(hex, 16);
+      console.log(`RPC ${url.slice(0, 40)}... returned block: ${blockNumber}`);
+      return blockNumber;
     } catch (error) {
       console.warn(`Failed to get latest block from ${url}:`, error instanceof Error ? error.message : String(error));
     }

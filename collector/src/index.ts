@@ -21,8 +21,10 @@ async function main(): Promise<void> {
 
   try {
     const latestBlock = await getLatestBlockNumber(NETWORK_CONFIG.fallbackRpcUrls);
+    console.log(`Latest block from RPC: ${latestBlock}`);
 
     const storedPythBlock = getMetadata(db, 'last_pyth_block');
+    console.log(`Stored Pyth block: ${storedPythBlock}`);
     const pythStartBlock = storedPythBlock ? Number.parseInt(storedPythBlock, 10) : getInitialPythBlock();
     const pythResult = await collectPythPrices(db, pythStartBlock, latestBlock);
     setMetadata(db, 'last_pyth_block', String(pythResult.lastBlock));
