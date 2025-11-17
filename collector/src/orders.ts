@@ -1,12 +1,18 @@
 import { Float } from '@rainlanguage/float';
+import { AbiCoder } from 'ethers';
 import type { RaindexOrder, RaindexOrderQuote } from '@rainlanguage/orderbook';
 import { insertQuotes, SqliteDatabase } from './db.js';
-import { STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN } from './config.js';
+import { STOCK_TOKENS, TRACKED_TOKENS, USDC_TOKEN, NETWORK_CONFIG } from './config.js';
 import { ProcessedQuote, Direction } from './types.js';
 import { buildQuoteId, getTokenByAddress, unixTimestamp } from './utils.js';
-import { createRaindexClient } from './raindexClient.ts';
+import { createRaindexClient } from './raindexClient.js';
 
 const trackedTokenAddresses = new Set(TRACKED_TOKENS.map((token) => token.address.toLowerCase()));
+
+const IOV2 = '(address token, bytes32 vaultId)';
+const EvaluableV4 = '(address interpreter, address store, bytes bytecode)';
+const OrderV4Type = `(address owner, ${EvaluableV4} evaluable, ${IOV2}[] validInputs, ${IOV2}[] validOutputs, bytes32 nonce)`;
+const abiCoder = AbiCoder.defaultAbiCoder();
 
 function determineDirection(inputSymbol: string, outputSymbol: string): Direction | null {
   if (inputSymbol.toUpperCase() === USDC_TOKEN.symbol) return 'SELL';
@@ -52,10 +58,12 @@ function buildQuoteFromRaindex(
     const inputIOIndex = quote.pair.inputIndex;
     const outputIOIndex = quote.pair.outputIndex;
 
-    // Get token addresses from order's orderDetails
-    const orderDetails = order.orderDetails as any;
-    const inputAddress = orderDetails?.validInputs?.[inputIOIndex]?.token?.address;
-    const outputAddress = orderDetails?.validOutputs?.[outputIOIndex]?.token?.address;
+    // Decode orderBytes to get validInputs/validOutputs
+    const decoded = abiCoder.decode([OrderV4Type], (order as any).orderBytes);
+    const orderData = decoded[0] as any;
+
+    const inputAddress = orderData.validInputs?.[inputIOIndex]?.token;
+    const outputAddress = orderData.validOutputs?.[outputIOIndex]?.token;
 
     if (!inputAddress || !outputAddress) {
       console.warn(`Missing token addresses for order ${order.orderHash}`);
@@ -122,10 +130,12 @@ export async function collectQuotes(
 
     // Get active orders filtered by our tracked tokens
     console.log(`Fetching orders with tracked tokens...`);
-    const ordersResult = await client.getOrders({
-      active: true,
-      tokens: TRACKED_TOKENS.map(t => ({ address: t.address, chainId: t.chainId }))
-    });
+    const tokenAddresses = TRACKED_TOKENS.map(t => t.address as `0x${string}`);
+    const ordersResult = await client.getOrders(
+      [NETWORK_CONFIG.chainId],
+      { tokens: tokenAddresses },
+      { page: 1, pageSize: 1000 }
+    );
 
     if (ordersResult.error || !ordersResult.value) {
       console.error('Failed to fetch orders:', ordersResult.error?.readableMsg ?? 'Unknown error');
