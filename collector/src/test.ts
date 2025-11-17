@@ -1,4 +1,5 @@
 import { collectQuotes } from './orders.js';
+import { collectPythPrices } from './pyth.js';
 import { openDatabase } from './db.js';
 
 async function test() {
@@ -9,20 +10,33 @@ async function test() {
     const db = openDatabase(':memory:');
     console.log('✅ Database opened\n');
 
-    // Test quote collection at a recent block
     const latestBlock = 38300000; // Approximate recent block
-    console.log(`📊 Testing quote collection at block ${latestBlock}...\n`);
+    const startBlock = latestBlock - 100; // Test last 100 blocks
 
-    const result = await collectQuotes(db, latestBlock);
+    // Test 1: Pyth price collection
+    console.log(`📊 Test 1: Pyth Prices (blocks ${startBlock} to ${latestBlock})...\n`);
+    const pythResult = await collectPythPrices(db, startBlock, latestBlock);
+    console.log(`\n📈 Pyth Results:`);
+    console.log(`  Blocks: ${startBlock} -> ${pythResult.lastBlock}`);
+    console.log(`  Prices collected: ${pythResult.count}`);
 
-    console.log('\n📈 Results:');
-    console.log(`  Block: ${result.blockNumber}`);
-    console.log(`  Quotes collected: ${result.count}`);
+    // Test 2: Quote collection
+    console.log(`\n📊 Test 2: Quotes at block ${latestBlock}...\n`);
+    const quoteResult = await collectQuotes(db, latestBlock);
+    console.log(`\n📈 Quote Results:`);
+    console.log(`  Block: ${quoteResult.blockNumber}`);
+    console.log(`  Quotes collected: ${quoteResult.count}`);
 
-    if (result.count > 0) {
-      console.log('\n✅ Test PASSED - Quotes collected successfully!');
+    // Summary
+    console.log('\n' + '='.repeat(50));
+    console.log('📊 SUMMARY:');
+    console.log(`  ✅ Pyth prices: ${pythResult.count} updates`);
+    console.log(`  ✅ Quotes: ${quoteResult.count} quotes`);
+
+    if (pythResult.count === 0 && quoteResult.count === 0) {
+      console.log('\n⚠️  WARNING: No data collected (check configuration)');
     } else {
-      console.log('\n⚠️  Test WARNING - No quotes found (this may be normal if no active orders)');
+      console.log('\n✅ Test PASSED - Data collected successfully!');
     }
 
     db.close();

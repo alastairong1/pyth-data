@@ -44,29 +44,46 @@ function decodeTicker(log: HyperSyncLog): string | undefined {
 }
 
 function decodePriceFeedUpdate(log: HyperSyncLog, collectedAt: number): DecodedPythUpdate | null {
-  if (!log.data || !log.topic0) return null;
-  if (log.topic0.toLowerCase() !== PYTH_EVENT_TOPIC.toLowerCase()) return null;
+  try {
+    if (!log.data || !log.topic0) {
+      console.warn(`Missing data or topic0 at block ${log.block_number}`);
+      return null;
+    }
 
-  const ticker = decodeTicker(log);
-  if (!ticker) return null;
+    if (log.topic0.toLowerCase() !== PYTH_EVENT_TOPIC.toLowerCase()) {
+      return null;
+    }
 
-  const dataHex = log.data.startsWith('0x') ? log.data.slice(2) : log.data;
-  if (dataHex.length < 192) return null;
+    const ticker = decodeTicker(log);
+    if (!ticker) {
+      console.warn(`Could not decode ticker at block ${log.block_number}, topic1: ${log.topic1}`);
+      return null;
+    }
 
-  const publishTime = hexToBigInt(`0x${dataHex.slice(0, 64)}`);
-  const price = hexToBigInt(`0x${dataHex.slice(64, 128)}`);
-  const conf = hexToBigInt(`0x${dataHex.slice(128, 192)}`);
+    const dataHex = log.data.startsWith('0x') ? log.data.slice(2) : log.data;
+    if (dataHex.length < 192) {
+      console.warn(`Data too short at block ${log.block_number}: ${dataHex.length} bytes, expected >= 192`);
+      return null;
+    }
 
-  return {
-    id: `${log.transaction_hash}:${ticker}:${publishTime.toString()}`,
-    ticker,
-    publishTime: Number(publishTime),
-    priceRaw: price.toString(),
-    confRaw: conf.toString(),
-    blockNumber: log.block_number,
-    transactionHash: log.transaction_hash,
-    collectedAt
-  };
+    const publishTime = hexToBigInt(`0x${dataHex.slice(0, 64)}`);
+    const price = hexToBigInt(`0x${dataHex.slice(64, 128)}`);
+    const conf = hexToBigInt(`0x${dataHex.slice(128, 192)}`);
+
+    return {
+      id: `${log.transaction_hash}:${ticker}:${publishTime.toString()}`,
+      ticker,
+      publishTime: Number(publishTime),
+      priceRaw: price.toString(),
+      confRaw: conf.toString(),
+      blockNumber: log.block_number,
+      transactionHash: log.transaction_hash,
+      collectedAt
+    };
+  } catch (error) {
+    console.error(`Error decoding Pyth log at block ${log.block_number}:`, error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 export async function collectPythPrices(
@@ -123,8 +140,6 @@ export async function collectPythPrices(
             if (log.block_number > lastProcessedBlock) {
               lastProcessedBlock = log.block_number;
             }
-          } else {
-            console.warn(`Failed to decode Pyth log at block ${log.block_number}`);
           }
         }
       }

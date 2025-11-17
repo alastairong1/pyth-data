@@ -128,22 +128,24 @@ export async function collectQuotes(
   try {
     const client = await createRaindexClient();
 
-    // Get active orders filtered by our tracked tokens
-    console.log(`Fetching orders with tracked tokens...`);
-    const tokenAddresses = TRACKED_TOKENS.map(t => t.address as `0x${string}`);
+    // Get ONLY active orders with USDC + tracked stock tokens
+    console.log(`Fetching active orders with USDC and stock tokens...`);
 
-    // Fetch all pages of orders
+    // Only fetch orders that have USDC paired with our stock tokens
+    // This dramatically reduces the number of orders we need to quote
+    const relevantTokens = [USDC_TOKEN, ...STOCK_TOKENS].map(t => t.address as `0x${string}`);
+
+    // Fetch only first 2 pages to limit rate limit hits
     const allOrders: RaindexOrder[] = [];
     let page = 1;
-    let hasMore = true;
-    const maxPages = 10;
+    const maxPages = 2; // Limit to first 2 pages (200 orders max)
 
-    while (hasMore && page <= maxPages) {
+    for (; page <= maxPages; page++) {
       const ordersResult = await client.getOrders(
         [NETWORK_CONFIG.chainId],
         {
-          owners: [],  // Empty array means all owners
-          tokens: tokenAddresses
+          owners: [],  // All owners
+          tokens: relevantTokens  // Only USDC + stock tokens
         },
         page
       );
@@ -154,32 +156,55 @@ export async function collectQuotes(
       }
 
       const pageOrders = ordersResult.value;
-      allOrders.push(...pageOrders);
-      console.log(`collectQuotes: Fetched page ${page} with ${pageOrders.length} orders`);
+
+      // Filter to only ACTIVE orders before adding
+      const activeOrders = pageOrders.filter(order => {
+        // Check if order has active flag (if available)
+        const orderData = order as any;
+        if (orderData.active === false) {
+          return false;
+        }
+        return true;
+      });
+
+      allOrders.push(...activeOrders);
+      console.log(`collectQuotes: Page ${page} - ${pageOrders.length} orders, ${activeOrders.length} active`);
 
       // If we got fewer than expected, we've reached the end
-      hasMore = pageOrders.length >= 100; // Assuming default page size
-      page++;
+      if (pageOrders.length < 100) {
+        break;
+      }
     }
 
-    console.log(`collectQuotes: Total ${allOrders.length} orders fetched`);
+    console.log(`collectQuotes: Total ${allOrders.length} active orders to quote`);
     const orders = allOrders;
 
     const processedQuotes: ProcessedQuote[] = [];
 
     // Get quotes for each order
+    let quotesAttempted = 0;
+    let quotesSucceeded = 0;
+    let quotesFailed = 0;
+
     for (const order of orders) {
       try {
+        quotesAttempted++;
         const quotesResult = await order.getQuotes();
 
         if (quotesResult.error) {
-          console.warn(`Quote failed for order ${order.orderHash}: ${quotesResult.error.readableMsg}`);
+          quotesFailed++;
+          // Only log first 5 failures to avoid spam
+          if (quotesFailed <= 5) {
+            console.warn(`Quote failed for order ${order.orderHash}: ${quotesResult.error.readableMsg}`);
+          }
           continue;
         }
 
         if (!quotesResult.value || quotesResult.value.length === 0) {
           continue;
         }
+
+        quotesSucceeded++;
 
         // Process each quote from this order
         for (const quote of quotesResult.value) {
@@ -188,10 +213,24 @@ export async function collectQuotes(
             processedQuotes.push(processed);
           }
         }
+
+        // Add delay every 5 orders to avoid rate limits (200ms each)
+        if (quotesAttempted % 5 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
       } catch (error) {
-        console.error(`Error getting quotes for order ${order.orderHash}:`, error);
+        quotesFailed++;
+        if (quotesFailed <= 5) {
+          console.error(`Error getting quotes for order ${order.orderHash}:`, error);
+        }
       }
     }
+
+    if (quotesFailed > 5) {
+      console.warn(`... and ${quotesFailed - 5} more quote failures (suppressed)`);
+    }
+
+    console.log(`Quote stats: ${quotesSucceeded} succeeded, ${quotesFailed} failed out of ${quotesAttempted} orders`);
 
     console.log(`collectQuotes: Processed ${processedQuotes.length} quotes`);
 
