@@ -18,7 +18,14 @@ export async function createRaindexClient(): Promise<RaindexClient> {
   try {
     console.log(`Fetching Raindex configuration from ${RAIN_STRATEGIES_URL}`);
     const response = await axios.get(RAIN_STRATEGIES_URL, { timeout: 10_000 });
-    const yamlConfig = response.data;
+    let yamlConfig = response.data;
+
+    // Replace publicnode with our preferred RPCs for Base
+    console.log('Patching YAML config to use mainnet.base.org and tenderly...');
+    yamlConfig = yamlConfig.replace(
+      'rpcs:\n      - https://base-rpc.publicnode.com',
+      'rpcs:\n      - https://mainnet.base.org\n      - https://gateway.tenderly.co/public/base'
+    );
 
     const clientResult = await RaindexClient.new([yamlConfig]);
 
@@ -27,7 +34,7 @@ export async function createRaindexClient(): Promise<RaindexClient> {
     }
 
     cachedClient = clientResult.value;
-    console.log('RaindexClient created successfully');
+    console.log('RaindexClient created successfully with custom RPCs');
     return clientResult.value;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -43,6 +43,39 @@ function parseFloatToNumber(floatHex: string): number {
   }
 }
 
+/**
+ * Pre-filters orders to check if they have at least one valid USDC<->stock token pair
+ * This avoids expensive getQuotes() RPC calls on orders we'd reject anyway
+ */
+function hasValidTokenPairs(order: RaindexOrder): boolean {
+  try {
+    const decoded = abiCoder.decode([OrderV4Type], (order as any).orderBytes);
+    const orderData = decoded[0] as any;
+
+    const validInputs = orderData.validInputs || [];
+    const validOutputs = orderData.validOutputs || [];
+
+    // Check if any input/output combination is a valid USDC<->stock pair
+    for (const input of validInputs) {
+      for (const output of validOutputs) {
+        const inputToken = getTokenByAddress(input.token, TRACKED_TOKENS);
+        const outputToken = getTokenByAddress(output.token, TRACKED_TOKENS);
+
+        if (inputToken && outputToken) {
+          const direction = determineDirection(inputToken.symbol, outputToken.symbol);
+          if (direction) {
+            return true; // Found at least one valid pair
+          }
+        }
+      }
+    }
+    return false; // No valid USDC<->stock pairs found
+  } catch (error) {
+    console.warn(`Failed to decode orderBytes for order ${order.orderHash}:`, error);
+    return false;
+  }
+}
+
 function buildQuoteFromRaindex(
   order: RaindexOrder,
   quote: RaindexOrderQuote,
@@ -176,24 +209,47 @@ export async function collectQuotes(
       }
     }
 
-    console.log(`collectQuotes: Total ${allOrders.length} active orders to quote`);
-    const orders = allOrders;
+    console.log(`collectQuotes: Total ${allOrders.length} active orders fetched`);
+
+    // Pre-filter orders to only those with valid USDC<->stock token pairs
+    console.log(`Pre-filtering orders for valid USDC<->stock pairs...`);
+    const validOrders = allOrders.filter(hasValidTokenPairs);
+    console.log(`Filtered to ${validOrders.length} orders with valid token pairs (skipped ${allOrders.length - validOrders.length})`);
 
     const processedQuotes: ProcessedQuote[] = [];
 
-    // Get quotes for each order
+    // Get quotes for each order in parallel batches
     let quotesAttempted = 0;
     let quotesSucceeded = 0;
     let quotesFailed = 0;
 
-    for (const order of orders) {
-      try {
+    // Process in batches of 10 for parallel execution
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < validOrders.length; i += BATCH_SIZE) {
+      const batch = validOrders.slice(i, i + BATCH_SIZE);
+      console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(validOrders.length / BATCH_SIZE)} (${batch.length} orders)`);
+
+      // Execute all quotes in this batch in parallel
+      const batchResults = await Promise.allSettled(
+        batch.map(order => order.getQuotes().then(result => ({ order, result })))
+      );
+
+      // Process results from this batch
+      for (const promiseResult of batchResults) {
         quotesAttempted++;
-        const quotesResult = await order.getQuotes();
+
+        if (promiseResult.status === 'rejected') {
+          quotesFailed++;
+          if (quotesFailed <= 5) {
+            console.error(`Quote promise rejected:`, promiseResult.reason);
+          }
+          continue;
+        }
+
+        const { order, result: quotesResult } = promiseResult.value;
 
         if (quotesResult.error) {
           quotesFailed++;
-          // Only log first 5 failures to avoid spam
           if (quotesFailed <= 5) {
             console.warn(`Quote failed for order ${order.orderHash}: ${quotesResult.error.readableMsg}`);
           }
@@ -213,16 +269,11 @@ export async function collectQuotes(
             processedQuotes.push(processed);
           }
         }
+      }
 
-        // Add delay every 5 orders to avoid rate limits (200ms each)
-        if (quotesAttempted % 5 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 200));
-        }
-      } catch (error) {
-        quotesFailed++;
-        if (quotesFailed <= 5) {
-          console.error(`Error getting quotes for order ${order.orderHash}:`, error);
-        }
+      // Rate limit delay between batches (not between individual orders)
+      if (i + BATCH_SIZE < validOrders.length) {
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
     }
 
