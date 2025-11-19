@@ -13,6 +13,8 @@ RUN npm run build
 FROM node:22-slim AS runner
 ENV NODE_ENV=production
 WORKDIR /app
+# Copy package.json for npm scripts
+COPY --from=build /app/package.json /app/package.json
 # Copy production deps only
 COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/dist /app/dist
