@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx src/test.ts"
+    "test": "tsx src/test.ts",
+    "cleanup-db": "tsx src/cleanup-db.ts"
   },
   "keywords": [],
   "author": "",
